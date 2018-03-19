@@ -1,10 +1,13 @@
-import express from 'express';
+import * as express from 'express';
 import { Strategy as VKontakteStrategy } from 'passport-vkontakte';
+import * as cookieParser from 'cookie-parser';
+import { urlencoded } from 'body-parser';
+import * as passport from 'passport';
 
 const app = express()
 // User session support middlewares. Your exact suite might vary depending on your app's needs.
-app.use(require('cookie-parser')());
-app.use(require('body-parser').urlencoded({extended: true}));
+app.use(cookieParser());
+app.use(urlencoded({extended: true}));
 app.use(require('express-session')({secret:'keyboard cat', resave: true, saveUninitialized: true}));
 app.use(passport.initialize());
 app.use(passport.session());
