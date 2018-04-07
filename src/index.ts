@@ -1,53 +1,74 @@
 import * as express from 'express';
-import { Strategy as VKontakteStrategy } from 'passport-vkontakte';
 import * as cookieParser from 'cookie-parser';
 import { urlencoded } from 'body-parser';
 import * as passport from 'passport';
 import * as https from 'https';
+import { RootObject, WallPostItem, PhotoId, Photo } from './vk/WallGetResponse';
+import { RelayBot } from './RelayBot';
+import axios from 'axios'
+import { env } from './env';
+import { VKCallback } from './vk/VKCallback';
+import * as TeleBot from "telebot";
 
-axios.get('https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY')
-  .then(response => {
-    console.log(response.data.url);
-    console.log(response.data.explanation);
-  })
-  .catch(error => {
-    console.log(error);
-  });
 
- 
-https.get('https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY', (resp) => {
-  let data = '';
- 
-  // A chunk of data has been recieved.
-  resp.on('data', (chunk) => {
-    data += chunk;
-  });
- 
-  // The whole response has been received. Print out the result.
-  resp.on('end', () => {
-    console.log(JSON.parse(data).explanation);
-  });
- 
-}).on("error", (err) => {
-  console.log("Error: " + err.message);
-});
+async function downloadPhoto(photo: Photo): Promise<any> {
+    const result = await axios.get(photo.photo_2560 || photo.photo_1280 || photo.photo_807 
+        || photo.photo_604 || photo.photo_130 || photo.photo_75);
 
-const app = express()
+    if (result.status != 200) throw new Error(result.statusText);
+    return result.data;
+}
+
+async function getAllPhotos(photoIds: PhotoId[]): Promise<Photo[]> {
+    const response: { data: RootObject<Photo> } = await axios.get(
+        `https://api.vk.com/method/photos.get?access_token=${env.vk.accessToken}&photo_ids=${photoIds.join()}&v=5.73`);
+    return response.data.response.items;
+        
+}
+
+const relay = new RelayBot(env.telegram.targetChatId, getAllPhotos, downloadPhoto, new TeleBot({
+    token: env.telegram.botToken
+    //allowedUpdates: [],
+  }));
+
+const count = 10;
+axios.get(`https://api.vk.com/method/wall.get?owner_id=-${env.vk.ownerId}&access_token=${env.vk.accessToken}&count=${count}&v=5.73`)
+    .then((response: { data: RootObject<WallPostItem> }) => {
+        console.log(response.data.response.items);
+        const item = response.data.response.items[0];
+        relay.sendPost(item).then(x => console.info(`Successfully send post ${item.id}`))
+    })
+    .catch((error: any) => {
+        console.error('error', error);
+    });
+const app = express();
 // User session support middlewares. Your exact suite might vary depending on your app's needs.
 app.use(cookieParser());
-app.use(urlencoded({extended: true}));
-app.use(require('express-session')({secret:'keyboard cat', resave: true, saveUninitialized: true}));
+app.use(urlencoded({ extended: true }));
+app.get('/', function (req, res) {
+    //Here you have an access to req.user
+    const callback = req.body as VKCallback;
+    switch (callback.type) {
+        case "confirmation": {
+            res.sendStatus(200);
+            return;
+        }
+        case "wall_post_new": {
+            relay.sendPost(callback.object);
+            res.sendStatus(200);
+            return;
+        }
+        default:
+            res.status(501).send("Not Implemented");
+            return;
+    }
+});
+app.get('/handle', function (req, res) {
+    //Here you have an access to req.user
+    res.send("Everything is fine");
+});
+app.listen(22000);
 
-https://api.vk.com/method/users.get?user_ids=210700286&fields=bdate&v=5.73
-
-app.get('/auth/vkontakte', passport.authenticate('vkontakte'));
-
-app.get('/auth/vkontakte/callback',
-  passport.authenticate('vkontakte', {
-    successRedirect: '/',
-    failureRedirect: '/login' 
-  })
-);
 
 app.get('/', function(req, res) {
     //Here you have an access to req.user
