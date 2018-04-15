@@ -1,44 +1,67 @@
-import { WallPostItem, Photo, Sticker, PhotoId } from "./vk/WallGetResponse";
+import {
+    WallPostItem,
+    Photo,
+    Sticker,
+    PhotoId,
+    Attachment
+} from "./vk/WallGetResponse";
 import * as TeleBot from "telebot";
 
-export class RelayBot {
-  constructor(
-    private targetChatId: string,
-    private getPhotos: (photoIds: PhotoId[]) => Promise<Photo[]>,
-    private downloadPhoto: (photo: Photo) => Promise<any>,
-    private bot: TeleBot 
-  ) {}
+enum SendableType {
+    Photo,
+    Text
+}
 
-  async sendPhoto(photo: Photo): Promise<any> {
-    const photoFile = this.downloadPhoto(photo);
-
-    return await this.bot.sendPhoto(this.targetChatId, photoFile, {
-      caption: photo.text
-    });
-  }
-
-  async sendPost(post: WallPostItem): Promise<void> {
-    if (post.text) {
-      await this.bot.sendMessage(this.targetChatId, post.text);
+type Sendable =
+    | {
+        type: SendableType.Photo;
+        url: string;
     }
-    for (const attachment of post.attachments) {
-      switch (attachment.type) {
+    | {
+        type: SendableType.Text;
+        text: string;
+    };
+
+const getPhotoUrl = (photo: Photo) =>
+    photo.photo_2560 ||
+    photo.photo_1280 ||
+    photo.photo_807 ||
+    photo.photo_604 ||
+    photo.photo_130 ||
+    photo.photo_75;
+
+export function convertAttachmentToSendable(attachment: Attachment, getPhotoUrl: (photo: Photo) => string): Sendable | undefined {
+    switch (attachment.type) {
         case "photo":
-          await this.sendPhoto(attachment.photo);
-          return;
-        case "link":
-          await this.bot.sendMessage(this.targetChatId,
-            `<a href="${attachment.link.url}">${attachment.link.url}</a>`,
-            { parseMode: "HTML" }
-          );
-          return;
+            return { type: SendableType.Photo, url: getPhotoUrl(attachment.photo) };
+        case "link": // gets automatically included in the text of a message
+        // return { type: SendableType.Link, url: attachment.link.url };
         case "photos_list":
         case "sticker":
         case "album":
         default:
-          console.warn(`Attachment type ${attachment.type} is not supported`);
-          return;
-      }
+            console.warn(`Attachment type ${attachment.type} is not supported`);
+            return;
     }
-  }
+}
+
+export function convertPostToMessage(
+    post: WallPostItem,
+    convertAttachmentToSendable: (attachment: Attachment) => Sendable | undefined
+): string {
+    let markdown = post.text;
+
+
+    if (post.attachments) {
+        const sendables = post.attachments.map(convertAttachmentToSendable).filter(x => x != undefined) as Sendable[];
+        const imgs = sendables.filter(s => s.type === SendableType.Photo).map(s => `![image](${(s as any).url})`).join('');
+        markdown = markdown + imgs;
+    }
+
+    return markdown;
+}
+
+export const relayPostToTelegram = (post: WallPostItem, sendMarkdown: (content: string) => Promise<void>): Promise<void> => {
+    const markdown = convertPostToMessage(post, x => convertAttachmentToSendable(x, getPhotoUrl));
+    return sendMarkdown(markdown);
 }
